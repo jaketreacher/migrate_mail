@@ -1,4 +1,4 @@
-# Migrate Mail v 0.1.0
+# Migrate Mail v 0.2.0
 
 ## Synopsis
 

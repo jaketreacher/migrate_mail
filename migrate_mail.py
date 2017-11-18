@@ -5,11 +5,7 @@ import time
 
 def imap_connect(username, password, server, port=993):
     imap = imaplib.IMAP4_SSL(server)
-    try:
-        imap.login(username, password)
-    except:
-        print("Cannot connect to {}.".format(username))
-        exit()
+    imap.login(username, password)
 
     return imap
 
@@ -70,22 +66,31 @@ def copy_mail(from_account, to_account):
 
 def main():
     dict_list = []
+    error_file = open('errors.txt', 'w')
+
     with open('data.csv') as datafile:
         reader = csv.DictReader(datafile)
         dict_list = list(reader)
 
     for data in dict_list:
-        print("Connecting to %s" % data['FROM_MAIL'])
-        from_account = imap_connect(data['FROM_MAIL'], data['FROM_PASS'], data['FROM_SERVER'])
+        try:
+            print("Connecting to %s" % data['FROM_MAIL'])
+            from_account = imap_connect(data['FROM_MAIL'], data['FROM_PASS'], data['FROM_SERVER'])
 
-        print("Connecting to %s" % data['TO_MAIL'])
-        to_account = imap_connect(data['TO_MAIL'], data['TO_PASS'], data['TO_SERVER'])
+            print("Connecting to %s" % data['TO_MAIL'])
+            to_account = imap_connect(data['TO_MAIL'], data['TO_PASS'], data['TO_SERVER'])
+        except Exception as e:
+            print("  Unable to connect.")
+            error_file.write("%s => %s || (%s)\n" % (data['FROM_MAIL'], data['TO_MAIL'], e))
+            continue
 
         print("--- From: {}, To: {} ---".format(data['FROM_MAIL'], data['TO_MAIL']))
         copy_mail(from_account, to_account)
 
         from_account.logout()
         to_account.logout()
+
+    error_file.close()
 
 if __name__ == "__main__":
     main()
