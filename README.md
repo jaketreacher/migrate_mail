@@ -2,7 +2,7 @@
 
 ## Synopsis
 
-A simple script to migrate mail from multiple accounts between two severs.  
+A simple script to migrate mail for multiple accounts between two severs.  
 
 ## To-Do
 * Check for duplicate(s) on destination before copying
