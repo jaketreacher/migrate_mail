@@ -91,7 +91,7 @@ def get_headers(imap, location):
     if( length > 0 ):
         print() # Move cursor to next line
     else:
-        print("Fetching %s... 0/0" % location)
+        print("Fetching %s headers... 0/0" % location)
 
     return header_list
 
