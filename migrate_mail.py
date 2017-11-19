@@ -67,36 +67,46 @@ def get_mail_table(from_server, to_server):
     
     return mail_table
 
-def get_all_mail(imap, location):
-    typ, data = imap.uid('search',None, 'ALL')
-    mail_list = []
+def get_headers(imap, location):
+    header_list = []
+
+    data = imap.uid('search', None, 'ALL')[1]
     uid_list = data[0].split()
     length = len(uid_list)
 
     for idx, uid in enumerate(uid_list):
-        print("Fetching {}... {}/{}".format(location, idx+1, length), end='\r') # Progress indicator
+        # Progress indicator
+        print("Fetching {} headers... {}/{}".format(location, idx+1, length), end='\r')
 
-        data = imap.uid('fetch', uid, '(FLAGS INTERNALDATE RFC822)')[1]
-        flags = " ".join([flag.decode() for flag in imaplib.ParseFlags(data[0][0])])
-        date = imaplib.Internaldate2tuple(data[0][0])
+        data = imap.uid('fetch', uid, '(BODY.PEEK[HEADER])')[1]
         message_id = email.message_from_bytes(data[0][1])['Message-ID'] # Used to check for duplicates
 
-        mail_dict = {
+        header_dict = {
             'uid': uid,
-            'data': data[0][1],
-            'flags': flags,
-            'date': date,
             'Message-ID': message_id
         }
 
-        mail_list.append(mail_dict)
+        header_list.append(header_dict)
 
     if( length > 0 ):
         print() # Move cursor to next line
     else:
         print("Fetching %s... 0/0" % location)
 
-    return mail_list
+    return header_list
+
+def get_mail_by_uid(imap, uid):
+    data = imap.uid('fetch', uid, '(FLAGS INTERNALDATE RFC822)')[1]
+    flags = " ".join([flag.decode() for flag in imaplib.ParseFlags(data[0][0])])
+    date_time = imaplib.Internaldate2tuple(data[0][0])
+
+    mail_data = {
+        'flags': flags,
+        'date_time': date_time,
+        'message':  data[0][1],
+    }
+
+    return mail_data
 
 def copy_mail(from_account, to_account):
     global COMPLETED
@@ -108,8 +118,7 @@ def copy_mail(from_account, to_account):
 
     for mail_index, mailbox in enumerate(mailboxes):
         print("{}: Mailbox {} of {}".format(mailbox, mail_index+1, num_mailboxes))
-        if (mailbox == '"INBOX.2017 Vice President"'):
-            raise imaplib.IMAP4.abort
+
         if( mailbox not in COMPLETED ):
             data = from_account.select(mailbox)[1]
             total_mail = int(data[0])
@@ -120,21 +129,21 @@ def copy_mail(from_account, to_account):
                     to_account.create(mail_table[mailbox])
                     to_account.select(mail_table[mailbox])
 
-                # Get all mail
-                from_mail = get_all_mail(from_account, "source")
-                to_mail = get_all_mail(to_account, "destination")
+                # Get all headers
+                from_headers = get_headers(from_account, "source")
+                to_headers = get_headers(to_account, "destination")
 
                 # Remove Duplicates
-                unique_mail = [mail for mail in from_mail \
-                    if mail['Message-ID'] not in \
-                        [mail['Message-ID'] for mail in to_mail] \
+                unique_headers = [header for header in from_headers \
+                    if header['Message-ID'] not in \
+                        [header['Message-ID'] for header in to_headers] \
                 ]
 
-                length = len(unique_mail)
+                length = len(unique_headers)
                 if length > 0:
-                    for idx, mail in enumerate(unique_mail):
+                    for idx, header in enumerate(unique_headers):
                         print("Copying mail... {}/{}".format(idx+1, length), end='\r')
-                        to_account.append(mail_table[mailbox], mail['flags'], mail['date'], mail['data'])
+                        to_account.append(mail_table[mailbox], **get_mail_by_uid(from_account, header['uid']))
                     print()
                 else:
                     print('No new mail')
@@ -147,8 +156,8 @@ def copy_mail(from_account, to_account):
         from_account.close()
 
 def fancy_sleep(message, duration):
-    for idx in range(duration+1):
-        print(message + "%s" % (duration-idx), end="\r")
+    for idx in range(duration, -1, -1):
+        print("%s %s " % (message, idx), end="\r")
         time.sleep(1)
     print()
 
@@ -178,7 +187,7 @@ def main():
                     success = True
                 except imaplib.IMAP4.abort:
                     print("Error: Connection interrupted.")
-                    fancy_sleep("Reconnecting in: ", 10)
+                    fancy_sleep("Reconnecting in:", 10)
                     from_account.logout()
                     to_account.logout()
 
