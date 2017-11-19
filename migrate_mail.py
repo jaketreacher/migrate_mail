@@ -150,10 +150,10 @@ def copy_mail(from_account, to_account):
 
                 COMPLETED.append(mailbox)
                 to_account.close()
+            from_account.close()
         else:
             print("Completed, skipping...")
         print() # new line for formatting
-        from_account.close()
 
 def fancy_sleep(message, duration):
     for idx in range(duration, -1, -1):
