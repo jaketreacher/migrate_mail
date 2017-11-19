@@ -1,11 +1,12 @@
-# Migrate Mail v 0.2.0
+# Migrate Mail v 0.3.0
 
 ## Synopsis
 
-A simple script to migrate mail for multiple accounts between two severs.  
+A simple script to migrate multiple mail accounts.  
 
 ## To-Do
-* Check for duplicate(s) on destination before copying
+* Comments
+* Refactoring
 
 ## Usage
 
