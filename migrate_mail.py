@@ -91,7 +91,7 @@ def get_headers(imap, location):
     if( length > 0 ):
         print() # Move cursor to next line
     else:
-        print("Fetching %s... 0/0" % location)
+        print("Fetching %s headers... 0/0" % location)
 
     return header_list
 
@@ -150,10 +150,10 @@ def copy_mail(from_account, to_account):
 
                 COMPLETED.append(mailbox)
                 to_account.close()
+            from_account.close()
         else:
             print("Completed, skipping...")
         print() # new line for formatting
-        from_account.close()
 
 def fancy_sleep(message, duration):
     for idx in range(duration, -1, -1):

@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.3.1 (2017-12-18)
+- Fix error when resuming from broken pipe
+- Fix print typos
+
 ## 0.3.0 (2017-12-18)
 - Automatically convert namespace/separators between servers
 - Attempt to reconnect if pipe breaks
