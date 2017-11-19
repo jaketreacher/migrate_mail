@@ -4,6 +4,12 @@ import imaplib
 import re
 import shlex
 import time
+import traceback
+
+from socket import gaierror
+
+# Globals
+COMPLETED = [] # if pipe breaks during copy, can easily resume position upon reconnect
 
 def imap_connect(username, password, server, port=993):
     imap = imaplib.IMAP4_SSL(server)
@@ -93,6 +99,7 @@ def get_all_mail(imap, location):
     return mail_list
 
 def copy_mail(from_account, to_account):
+    global COMPLETED
     mailboxes = ['"' + shlex.split(item.decode())[-1] + '"' for item in from_account.list()[1]]
 
     num_mailboxes = len(mailboxes)
@@ -100,40 +107,53 @@ def copy_mail(from_account, to_account):
     mail_table = get_mail_table(from_account, to_account)
 
     for mail_index, mailbox in enumerate(mailboxes):
-        code, data = from_account.select(mailbox)
-        total_mail = int(data[0])
-        print("{}: {} mail, {}/{}".format(mailbox, total_mail, mail_index+1, num_mailboxes))
-        if total_mail > 0:
-            # Create mailbox on destination if it doesn't exist
-            code = to_account.select(mail_table[mailbox])[0]
-            if code == 'NO':
-                to_account.create(mail_table[mailbox])
-                to_account.select(mail_table[mailbox])
+        print("{}: Mailbox {} of {}".format(mailbox, mail_index+1, num_mailboxes))
+        if (mailbox == '"INBOX.2017 Vice President"'):
+            raise imaplib.IMAP4.abort
+        if( mailbox not in COMPLETED ):
+            data = from_account.select(mailbox)[1]
+            total_mail = int(data[0])
+            if total_mail > 0:
+                # Create mailbox on destination if it doesn't exist
+                code = to_account.select(mail_table[mailbox])[0]
+                if code == 'NO':
+                    to_account.create(mail_table[mailbox])
+                    to_account.select(mail_table[mailbox])
 
-            # Get all mail
-            from_mail = get_all_mail(from_account, "source")
-            to_mail = get_all_mail(to_account, "destination")
+                # Get all mail
+                from_mail = get_all_mail(from_account, "source")
+                to_mail = get_all_mail(to_account, "destination")
 
-            # Remove Duplicates
-            unique_mail = [mail for mail in from_mail \
-                if mail['Message-ID'] not in \
-                    [mail['Message-ID'] for mail in to_mail] \
-            ]
+                # Remove Duplicates
+                unique_mail = [mail for mail in from_mail \
+                    if mail['Message-ID'] not in \
+                        [mail['Message-ID'] for mail in to_mail] \
+                ]
 
-            length = len(unique_mail)
-            if length > 0:
-                for idx, mail in enumerate(unique_mail):
-                    print("Copying mail... {}/{}".format(idx+1, length), end='\r')
-                    to_account.append(mail_table[mailbox], mail['flags'], mail['date'], mail['data'])
-                print()
-            else:
-                print('No new mail')
+                length = len(unique_mail)
+                if length > 0:
+                    for idx, mail in enumerate(unique_mail):
+                        print("Copying mail... {}/{}".format(idx+1, length), end='\r')
+                        to_account.append(mail_table[mailbox], mail['flags'], mail['date'], mail['data'])
+                    print()
+                else:
+                    print('No new mail')
 
-            to_account.close()
+                COMPLETED.append(mailbox)
+                to_account.close()
+        else:
+            print("Completed, skipping...")
         print() # new line for formatting
         from_account.close()
 
+def fancy_sleep(message, duration):
+    for idx in range(duration+1):
+        print(message + "%s" % (duration-idx), end="\r")
+        time.sleep(1)
+    print()
+
 def main():
+    global COMPLETED
     dict_list = []
     error_file = open('errors.txt', 'w')
 
@@ -142,20 +162,32 @@ def main():
         dict_list = list(reader)
 
     for data in dict_list:
+        COMPLETED = []
+        success = False
         try:
-            print("Connecting to %s" % data['FROM_MAIL'])
-            from_account = imap_connect(data['FROM_MAIL'], data['FROM_PASS'], data['FROM_SERVER'])
+            while( not success ):
+                print("Connecting to %s" % data['FROM_MAIL'])
+                from_account = imap_connect(data['FROM_MAIL'], data['FROM_PASS'], data['FROM_SERVER'])
 
-            print("Connecting to %s" % data['TO_MAIL'])
-            to_account = imap_connect(data['TO_MAIL'], data['TO_PASS'], data['TO_SERVER'])
-        except Exception as e:
+                print("Connecting to %s" % data['TO_MAIL'])
+                to_account = imap_connect(data['TO_MAIL'], data['TO_PASS'], data['TO_SERVER'])
+
+                print("--- From: {}, To: {} ---".format(data['FROM_MAIL'], data['TO_MAIL']))
+                try:
+                    copy_mail(from_account, to_account)
+                    success = True
+                except imaplib.IMAP4.abort:
+                    print("Error: Connection interrupted.")
+                    fancy_sleep("Reconnecting in: ", 10)
+                    from_account.logout()
+                    to_account.logout()
+
+        except (ConnectionRefusedError, gaierror, imaplib.IMAP4.error) as e:
             print("  Unable to connect.")
-            error_file.write("%s => %s || (%s)\n" % (data['FROM_MAIL'], data['TO_MAIL'], e))
+            error_file.write("%s => %s\n" % (data['FROM_MAIL'], data['TO_MAIL']))
+            error_file.write(traceback.format_exc(3) + "\n======\n")
             continue
-
-        print("--- From: {}, To: {} ---".format(data['FROM_MAIL'], data['TO_MAIL']))
-        copy_mail(from_account, to_account)
-
+        
         from_account.logout()
         to_account.logout()
 
