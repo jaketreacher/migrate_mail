@@ -1,6 +1,7 @@
 import csv
 import email
 import imaplib
+import re
 import shlex
 import time
 
@@ -49,13 +50,14 @@ def get_mail_table(from_server, to_server):
 
     for mailbox in mailbox_list:
         # Change the namespace and replace the separators
-        mail_table[mailbox['name']] = \
-            change_namespace(
-                mailbox['name'],
-                from_namespace,
-                to_namespace,
-                mailbox['sep']
-            ).replace(mailbox['sep'], new_sep)
+        key = '"' + mailbox['name'].replace('"','') + '"'
+        data = change_namespace(
+                    mailbox['name'],
+                    from_namespace,
+                    to_namespace,
+                    mailbox['sep']
+                ).replace(mailbox['sep'], new_sep)
+        mail_table[key] = data
     
     return mail_table
 
@@ -128,7 +130,7 @@ def copy_mail(from_account, to_account):
                 print('No new mail')
 
             to_account.close()
-            print() # new line for formatting
+        print() # new line for formatting
         from_account.close()
 
 def main():
