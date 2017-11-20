@@ -164,7 +164,7 @@ def fancy_sleep(message, duration):
 def main():
     global COMPLETED
     dict_list = []
-    error_file = open('errors.txt', 'w')
+    error_file = open('log/%d.txt' % int(time.time()), 'w')
 
     with open('data.csv') as datafile:
         reader = csv.DictReader(datafile)
