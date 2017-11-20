@@ -9,6 +9,17 @@ import traceback
 from socket import gaierror
 
 # Globals
+"""
+<my_dict> = {
+    '<mailbox>': {
+        'complete': <bool>,
+        'data': [{
+            'uid': uid,
+            'message-id': message-id
+        }]
+    }
+}
+"""
 COMPLETED = [] # if pipe breaks during copy, can easily resume position upon reconnect
 
 def imap_connect(username, password, server, port=993):
@@ -43,8 +54,32 @@ def get_namespace(imap):
 
     return (results[0], results[1])
 
-def get_mailboxes(from_server, to_server):
-    """ Get the mailboxes of the from_server and to_server.
+def get_mailboxes(imap, with_quotes = True):
+    """ Get a list of all mailboxes on the server.
+
+    Args:
+        imap <imaplib.IMAP4_SSL>: account to fetch data
+        with_quotes <bool>: Whether the resulting array should
+            enclose the mailbox names with double quotes
+
+    Returns:
+        ["<str>"]: list of mailboxes
+            Surrounded by double quotes by default
+    """
+    mailboxes = [
+        shlex.split(mailbox \
+            .decode() \
+        )[-1].replace('"','') \
+        for mailbox in imap.list()[1]
+    ]
+
+    if with_quotes:
+        mailboxes = ['"'+mailbox+'"' for mailbox in mailboxes]
+
+    return mailboxes
+
+def get_mailbox_data(from_server, to_server):
+    """ Get the 'mailbox data' of the from_server and to_server.
     
     Determines the appropriately named mailbox on the to_server,
     taking into account differences in namespaces and separators.
@@ -52,11 +87,12 @@ def get_mailboxes(from_server, to_server):
     The resulting mailbox names are enclosed in double quotes.
 
     Args:
-        from_server <imaplib.IMAP4_SSL>: to source account
-        from_server <imaplib.IMAP4_SSL>: to destination account
+        from_server <imaplib.IMAP4_SSL>: source account
+        to_server <imaplib.IMAP4_SSL>: destination account
 
     Returns:
-        [(from_mailbox <str>, to_mailbox <str>)]
+        [("<str>", "<str>")]: source mailbox, destination mailbox
+            Each entry is surrounded by double quotes
 
         Example:
             [("INBOX.My Folder.Subfolder", "My Folder/Subfolder")]
@@ -64,12 +100,7 @@ def get_mailboxes(from_server, to_server):
     from_ns, from_sep = get_namespace(from_server)
     to_ns, to_sep = get_namespace(to_server)
     
-    from_mailboxes = [
-        shlex.split(mailbox \
-            .decode() \
-        )[-1].replace('"','') \
-        for mailbox in from_server.list()[1]
-    ]
+    from_mailboxes = get_mailboxes(from_server, False)
 
     to_mailboxes = [
         to_ns \
@@ -79,8 +110,9 @@ def get_mailboxes(from_server, to_server):
         for mailbox in from_mailboxes
     ]
 
-    all_mailboxes = [('"'+from_mailbox+'"', '"'+to_mailbox+'"') for from_mailbox, to_mailbox in zip(from_mailboxes, to_mailboxes)]
-    return all_mailboxes
+    mailbox_data = [('"'+from_mailbox+'"', '"'+to_mailbox+'"') for from_mailbox, to_mailbox in zip(from_mailboxes, to_mailboxes)]
+
+    return mailbox_data
 
 def get_headers(imap, location):
     header_list = []
@@ -125,11 +157,11 @@ def get_mail_by_uid(imap, uid):
 
 def copy_mail(from_account, to_account):
     global COMPLETED
-    mailboxes = get_mailboxes(from_account, to_account)
+    mailbox_data = get_mailbox_data(from_account, to_account)
 
-    num_mailboxes = len(mailboxes)
+    num_mailboxes = len(mailbox_data)
 
-    for mail_index, (from_mailbox, to_mailbox) in enumerate(mailboxes):
+    for mail_index, (from_mailbox, to_mailbox) in enumerate(mailbox_data):
         print("{}: Mailbox {} of {}".format(from_mailbox, mail_index+1, num_mailboxes))
 
         if( from_mailbox not in COMPLETED ):
