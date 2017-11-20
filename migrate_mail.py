@@ -17,55 +17,70 @@ def imap_connect(username, password, server, port=993):
 
     return imap
 
-def get_mailbox_info(mailbox_data):
-    data = re.search('(?P<flags>\(.*\)) "(?P<sep>.)" (?P<name>.*)', 
-            mailbox_data[0].decode()).groupdict()
-    sep = data['sep']
-    namespace = data['name'] if (sep == '.') else ''
-    return sep, namespace
+def get_namespace(imap):
+    """ Get the namespace and separator of the specified mail account
 
-def convert_mailbox_format(mailbox_data):
-    data_list = []
-    for box in mailbox_data:
-        data_list.append(
-            re.search('(?P<flags>\(.*\)) "(?P<sep>.)" (?P<name>.*)', 
-            box.decode()).groupdict()
-        )
-    return data_list
+    Explanation:
+        imap.namespace() returns:
+            (<code>, [b'(("<namespace>" "<separator>")) NIL NIL'])
+        
+        imap.namespace()[1][0] returns:
+            '(("<namespace>" "<separator>")) NIL NIL'
+        
+        Using replace and shlex returns:
+            [<namespace>, <separator>, NIL, NIL]
 
-def change_namespace(name, old_ns, new_ns, old_sep):
-    name = name.replace('"','')
-    if (name.upper() != "INBOX"):
-        if (old_ns != '') and (new_ns == ''):
-            name = name.replace(old_ns + old_sep, '', 1)
-        if (old_ns == '') and (new_ns != ''):
-            name = new_ns + old_sep + name
-        if (old_ns != '') and (new_ns != ''):
-            name = name.replace(old_ns + old_sep, new_new + old_sep, 1)
-    return '"' + name + '"'
+    Args:
+        imap <imaplib.IMAP4_SSL>: the account to check
 
-def get_mail_table(from_server, to_server):
-    from_mailbox_data = from_server.list()[1]
-    to_mailbox_data = to_server.list()[1]
+    Returns:
+        (namespace <str>, separator <str>)
+    """
+    results = shlex.split(imap.namespace()[1][0].decode() \
+        .replace('(','') \
+        .replace(')','')
+    )
 
-    _, from_namespace = get_mailbox_info(from_mailbox_data)
-    new_sep, to_namespace = get_mailbox_info(to_mailbox_data)
+    return (results[0], results[1])
 
-    mailbox_list = convert_mailbox_format(from_mailbox_data)
-    mail_table = dict()
-
-    for mailbox in mailbox_list:
-        # Change the namespace and replace the separators
-        key = '"' + mailbox['name'].replace('"','') + '"'
-        data = change_namespace(
-                    mailbox['name'],
-                    from_namespace,
-                    to_namespace,
-                    mailbox['sep']
-                ).replace(mailbox['sep'], new_sep)
-        mail_table[key] = data
+def get_mailboxes(from_server, to_server):
+    """ Get the mailboxes of the from_server and to_server.
     
-    return mail_table
+    Determines the appropriately named mailbox on the to_server,
+    taking into account differences in namespaces and separators.
+
+    The resulting mailbox names are enclosed in double quotes.
+
+    Args:
+        from_server <imaplib.IMAP4_SSL>: to source account
+        from_server <imaplib.IMAP4_SSL>: to destination account
+
+    Returns:
+        [(from_mailbox <str>, to_mailbox <str>)]
+
+        Example:
+            [("INBOX.My Folder.Subfolder", "My Folder/Subfolder")]
+    """
+    from_ns, from_sep = get_namespace(from_server)
+    to_ns, to_sep = get_namespace(to_server)
+    
+    from_mailboxes = [
+        shlex.split(mailbox \
+            .decode() \
+        )[-1].replace('"','') \
+        for mailbox in from_server.list()[1]
+    ]
+
+    to_mailboxes = [
+        to_ns \
+        + mailbox \
+            .replace(from_ns, '') \
+            .replace(from_sep, to_sep) \
+        for mailbox in from_mailboxes
+    ]
+
+    all_mailboxes = [('"'+from_mailbox+'"', '"'+to_mailbox+'"') for from_mailbox, to_mailbox in zip(from_mailboxes, to_mailboxes)]
+    return all_mailboxes
 
 def get_headers(imap, location):
     header_list = []
@@ -110,24 +125,22 @@ def get_mail_by_uid(imap, uid):
 
 def copy_mail(from_account, to_account):
     global COMPLETED
-    mailboxes = ['"' + shlex.split(item.decode())[-1] + '"' for item in from_account.list()[1]]
+    mailboxes = get_mailboxes(from_account, to_account)
 
     num_mailboxes = len(mailboxes)
-    # mail table used as a hash to convert old mailbox to new format, if required
-    mail_table = get_mail_table(from_account, to_account)
 
-    for mail_index, mailbox in enumerate(mailboxes):
-        print("{}: Mailbox {} of {}".format(mailbox, mail_index+1, num_mailboxes))
+    for mail_index, (from_mailbox, to_mailbox) in enumerate(mailboxes):
+        print("{}: Mailbox {} of {}".format(from_mailbox, mail_index+1, num_mailboxes))
 
-        if( mailbox not in COMPLETED ):
-            data = from_account.select(mailbox)[1]
+        if( from_mailbox not in COMPLETED ):
+            data = from_account.select(from_mailbox)[1]
             total_mail = int(data[0])
             if total_mail > 0:
                 # Create mailbox on destination if it doesn't exist
-                code = to_account.select(mail_table[mailbox])[0]
+                code = to_account.select(to_mailbox)[0]
                 if code == 'NO':
-                    to_account.create(mail_table[mailbox])
-                    to_account.select(mail_table[mailbox])
+                    to_account.create(to_mailbox)
+                    to_account.select(to_mailbox)
 
                 # Get all headers
                 from_headers = get_headers(from_account, "source")
@@ -143,12 +156,12 @@ def copy_mail(from_account, to_account):
                 if length > 0:
                     for idx, header in enumerate(unique_headers):
                         print("Copying mail... {}/{}".format(idx+1, length), end='\r')
-                        to_account.append(mail_table[mailbox], **get_mail_by_uid(from_account, header['uid']))
+                        to_account.append(to_mailbox, **get_mail_by_uid(from_account, header['uid']))
                     print()
                 else:
                     print('No new mail')
 
-                COMPLETED.append(mailbox)
+                COMPLETED.append(from_mailbox)
                 to_account.close()
             from_account.close()
         else:
