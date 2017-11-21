@@ -208,6 +208,9 @@ def get_all_headers(imap):
             data = imap.uid('fetch', uid, '(BODY.PEEK[HEADER])')[1]
             try:
                 message_id = email.message_from_bytes(data[0][1])['Message-ID']
+                if message_id == None:
+                    remaining -= 1
+                    continue
             except TypeError:
                 # unable to get message-id
                 # to-do: implement logging here
