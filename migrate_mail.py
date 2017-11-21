@@ -101,41 +101,37 @@ def get_mailboxes(imap, with_quotes = True):
 
     return mailboxes
 
-def get_mailbox_data(from_server, to_server):
-    """ Get the 'mailbox data' of the from_server and to_server.
+def convert_mailbox(from_account, to_account, mailbox):
+    """ Convert the mailbox to be named appropriately for the destination.
     
-    Determines the appropriately named mailbox on the to_server,
-    taking into account differences in namespaces and separators.
-
-    The resulting mailbox names are enclosed in double quotes.
+    Takes into account differences in namespaces and separators.
+    If the mailbox doesn't exist, it will be created.
 
     Args:
-        from_server <imaplib.IMAP4_SSL>: source account
-        to_server <imaplib.IMAP4_SSL>: destination account
+        from_account <imaplib.IMAP4_SSL>: source account
+        to_account <imaplib.IMAP4_SSL>: destination account
+        mailbox <str>: the mailbox to convert
 
     Returns:
-        [("<str>", "<str>")]: source mailbox, destination mailbox
-            Each entry is surrounded by double quotes
-
-        Example:
-            [("INBOX.My Folder.Subfolder", "My Folder/Subfolder")]
+        "<str>": converted mailbox - surrounded by double quotes
     """
-    from_ns, from_sep = get_namespace(from_server)
-    to_ns, to_sep = get_namespace(to_server)
-    
-    from_mailboxes = get_mailboxes(from_server, False)
+    from_ns, from_sep = get_namespace(from_account)
+    to_ns, to_sep = get_namespace(to_account)
 
-    to_mailboxes = [
-        to_ns \
-        + mailbox \
-            .replace(from_ns, '') \
-            .replace(from_sep, to_sep) \
-        for mailbox in from_mailboxes
-    ]
+    converted = to_ns \
+                + mailbox \
+                    .replace('"','') \
+                    .replace(from_ns, '') \
+                    .replace(from_sep, to_sep)    
+    converted = '"'+converted+'"'    
 
-    mailbox_data = [('"'+from_mailbox+'"', '"'+to_mailbox+'"') for from_mailbox, to_mailbox in zip(from_mailboxes, to_mailboxes)]
+    response = to_account.select(converted)[0]
+    if response == 'NO':
+        to_account.create(converted)
+    else:
+        to_account.close()
 
-    return mailbox_data
+    return converted
 
 def get_headers(imap, location):
     header_list = []
@@ -180,22 +176,20 @@ def get_mail_by_uid(imap, uid):
 
 def copy_mail(from_account, to_account):
     global COMPLETED
-    mailbox_data = get_mailbox_data(from_account, to_account)
 
-    num_mailboxes = len(mailbox_data)
+    from_mailboxes = get_mailboxes(from_account)
 
-    for mail_index, (from_mailbox, to_mailbox) in enumerate(mailbox_data):
+    num_mailboxes = len(from_mailboxes)
+
+    for mail_index, from_mailbox in enumerate(from_mailboxes):
         print("{}: Mailbox {} of {}".format(from_mailbox, mail_index+1, num_mailboxes))
 
         if( from_mailbox not in COMPLETED ):
             data = from_account.select(from_mailbox)[1]
             total_mail = int(data[0])
             if total_mail > 0:
-                # Create mailbox on destination if it doesn't exist
-                code = to_account.select(to_mailbox)[0]
-                if code == 'NO':
-                    to_account.create(to_mailbox)
-                    to_account.select(to_mailbox)
+                to_mailbox = convert_mailbox(from_account, to_account, from_mailbox)
+                to_account.select(to_mailbox)
 
                 # Get all headers
                 from_headers = get_headers(from_account, "source")
