@@ -8,20 +8,6 @@ import traceback
 
 from socket import gaierror
 
-# Globals
-"""
-<my_dict> = {
-    '<mailbox>': {
-        'complete': <bool>,
-        'data': [{
-            'uid': uid,
-            'message-id': message-id
-        }]
-    }
-}
-"""
-COMPLETED = [] # if pipe breaks during copy, can easily resume position upon reconnect
-
 def imap_connect(username, password, server, port=993):
     imap = imaplib.IMAP4_SSL(server)
     imap.login(username, password)
@@ -161,6 +147,61 @@ def get_headers(imap, location):
 
     return header_list
 
+def get_mail_count(imap, mailbox_list):
+    total = 0
+    num_mailboxes = len(mailbox_list)
+    for idx, mailbox in enumerate(mailbox_list):
+        print("Counting mail: %d (Mailbox %d of %d) " \
+            % (total, idx+1, num_mailboxes), end='\r')
+        total += int(imap.select(mailbox)[1][0])
+        imap.close()
+    print("Counting mail: %d (Mailbox %d of %d) " \
+        % (total, idx+1, num_mailboxes))
+    return total
+
+def get_all_headers(imap):
+    """ Get all headers
+
+    Args:
+        imap <imaplib.IMAP4_SSL>: account to fetch data
+
+    Returns:
+        A dictionary in the following format:
+        headers = {
+            'mailbox0': [(uid0, mid0), (uid1, mid1)],
+            'mailbox1': [(uid2, mid2), (uid3, mid3)]
+        }
+        mid = message-id
+    """
+    headers = dict()
+
+    mailboxes = get_mailboxes(imap)
+    total = get_mail_count(imap, mailboxes)
+    remaining = total
+    for mailbox in mailboxes:
+        headers[mailbox] = list()
+
+        imap.select(mailbox)
+        uid_list = imap.uid('search', None, 'ALL')[1][0].split()
+
+        for uid in uid_list:
+            print('Remaining: %d ' % remaining, end='\r')
+            data = imap.uid('fetch', uid, '(BODY.PEEK[HEADER])')[1]
+            try:
+                message_id = email.message_from_bytes(data[0][1])['Message-ID']
+            except TypeError:
+                # unable to get message-id
+                # to-do: implement logging here
+                remaining -= 1
+                continue
+
+            package = (uid, message_id)
+            headers[mailbox].append(package)
+            remaining -= 1
+    print('Remaining: %d ' % remaining)
+    
+    return headers
+
 def get_mail_by_uid(imap, uid):
     data = imap.uid('fetch', uid, '(FLAGS INTERNALDATE RFC822)')[1]
     flags = " ".join([flag.decode() for flag in imaplib.ParseFlags(data[0][0])])
@@ -174,49 +215,50 @@ def get_mail_by_uid(imap, uid):
 
     return mail_data
 
+def get_unique_headers(from_account, to_account):
+    print("Fetching source headers...")
+    from_headers = get_all_headers(from_account)
+    print()
+    print("Fetching destination headers...")
+    to_headers = get_all_headers(to_account)
+    print()
+
+    to_mids = list()
+    for mailbox, data in to_headers.items():
+        for uid, mid in data:
+            to_mids.append(mid)
+
+    unique = dict()
+    total = 0
+    for mailbox, data in from_headers.items():
+        unique[mailbox] = list()
+        for uid, mid in data:
+            if mid not in to_mids:
+                unique[mailbox].append(uid)
+                total += 1
+
+    return unique, total
+
 def copy_mail(from_account, to_account):
-    global COMPLETED
+    unique_headers, total = get_unique_headers(from_account, to_account)
 
-    from_mailboxes = get_mailboxes(from_account)
+    remaining = total
 
-    num_mailboxes = len(from_mailboxes)
-
-    for mail_index, from_mailbox in enumerate(from_mailboxes):
-        print("{}: Mailbox {} of {}".format(from_mailbox, mail_index+1, num_mailboxes))
-
-        if( from_mailbox not in COMPLETED ):
-            data = from_account.select(from_mailbox)[1]
-            total_mail = int(data[0])
-            if total_mail > 0:
-                to_mailbox = convert_mailbox(from_account, to_account, from_mailbox)
-                to_account.select(to_mailbox)
-
-                # Get all headers
-                from_headers = get_headers(from_account, "source")
-                to_headers = get_headers(to_account, "destination")
-
-                # Remove Duplicates
-                unique_headers = [header for header in from_headers \
-                    if header['Message-ID'] not in \
-                        [header['Message-ID'] for header in to_headers] \
-                ]
-
-                length = len(unique_headers)
-                if length > 0:
-                    for idx, header in enumerate(unique_headers):
-                        print("Copying mail... {}/{}".format(idx+1, length), end='\r')
-                        to_account.append(to_mailbox, **get_mail_by_uid(from_account, header['uid']))
-                    print()
-                else:
-                    print('No new mail')
-
-                COMPLETED.append(from_mailbox)
-                to_account.close()
-            from_account.close()
-        else:
-            print("Completed, skipping...")
-        print() # new line for formatting
-
+    if total > 0:
+        print("Copying mail...")
+        print("Total: %d" % total)
+        for mailbox, uid_list in unique_headers.items():
+            to_mailbox = convert_mailbox(from_account, to_account, mailbox)
+            from_account.select(mailbox)
+            
+            for uid in uid_list:
+                print('Remaining: %d ' % remaining, end='\r')
+                to_account.append(to_mailbox, **get_mail_by_uid(from_account, uid))
+                remaining -= 1
+        print('Remaining: %d ' % remaining)
+    else:
+        print('No mail to copy')
+    
 def fancy_sleep(message, duration):
     for idx in range(duration, -1, -1):
         print("%s %s " % (message, idx), end="\r")
@@ -224,26 +266,24 @@ def fancy_sleep(message, duration):
     print()
 
 def main():
-    global COMPLETED
-    dict_list = []
     error_file = open('log/%d.txt' % int(time.time()), 'w')
 
     with open('data.csv') as datafile:
         reader = csv.DictReader(datafile)
-        dict_list = list(reader)
+        data_list = list(reader)
 
-    for data in dict_list:
-        COMPLETED = []
+    for data in data_list:
         success = False
         try:
             while( not success ):
+                print("--- From: {}, To: {} ---".format(data['FROM_MAIL'], data['TO_MAIL']))
+                
                 print("Connecting to %s" % data['FROM_MAIL'])
                 from_account = imap_connect(data['FROM_MAIL'], data['FROM_PASS'], data['FROM_SERVER'])
 
                 print("Connecting to %s" % data['TO_MAIL'])
                 to_account = imap_connect(data['TO_MAIL'], data['TO_PASS'], data['TO_SERVER'])
 
-                print("--- From: {}, To: {} ---".format(data['FROM_MAIL'], data['TO_MAIL']))
                 try:
                     copy_mail(from_account, to_account)
                     success = True
