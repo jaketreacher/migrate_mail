@@ -14,6 +14,25 @@ def imap_connect(username, password, server, port=993):
 
     return imap
 
+def authenticate(verbose = True):
+    if verbose: print("Connecting to %s" % CREDENTIALS['FROM_MAIL'])
+    from_account = imap_connect(
+        CREDENTIALS['FROM_MAIL'],
+        CREDENTIALS['FROM_PASS'],
+        CREDENTIALS['FROM_SERVER']
+    )
+
+    if verbose: print("Connecting to %s" % CREDENTIALS['TO_MAIL'])
+    to_account = imap_connect(
+        CREDENTIALS['TO_MAIL'],
+        CREDENTIALS['TO_PASS'],
+        CREDENTIALS['TO_SERVER']
+    )
+    
+    print() # New line for formatting
+
+    return from_account, to_account
+
 def get_namespace(imap):
     """ Get the namespace and separator of the specified mail account
 
@@ -253,8 +272,20 @@ def copy_mail(from_account, to_account):
             
             for uid in uid_list:
                 print('Remaining: %d ' % remaining, end='\r')
-                to_account.append(to_mailbox, **get_mail_by_uid(from_account, uid))
-                remaining -= 1
+                success = False
+                while(not success):
+                    try:
+                        to_account.append(to_mailbox, **get_mail_by_uid(from_account, uid))
+                        remaining -= 1
+                        success = True
+                    except (imaplib.IMAP4.error, imaplib.IMAP4.abort):
+                        print("\nError: Attempting to reconnect")
+                        fancy_sleep("Reconnecting in:", 10)
+                        from_account.logout()
+                        to_account.logout()
+                        from_account, to_account = authenticate(False)
+                        from_account.select(mailbox)
+                        to_account.select(to_mailbox)
         print('Remaining: %d ' % remaining)
     else:
         print('No mail to copy')
@@ -266,6 +297,8 @@ def fancy_sleep(message, duration):
     print()
 
 def main():
+    global CREDENTIALS
+    
     error_file = open('log/%d.txt' % int(time.time()), 'w')
 
     with open('data.csv') as datafile:
@@ -273,26 +306,11 @@ def main():
         data_list = list(reader)
 
     for data in data_list:
-        success = False
+        CREDENTIALS = data
         try:
-            while( not success ):
-                print("--- From: {}, To: {} ---".format(data['FROM_MAIL'], data['TO_MAIL']))
-                
-                print("Connecting to %s" % data['FROM_MAIL'])
-                from_account = imap_connect(data['FROM_MAIL'], data['FROM_PASS'], data['FROM_SERVER'])
-
-                print("Connecting to %s" % data['TO_MAIL'])
-                to_account = imap_connect(data['TO_MAIL'], data['TO_PASS'], data['TO_SERVER'])
-
-                try:
-                    copy_mail(from_account, to_account)
-                    success = True
-                except imaplib.IMAP4.abort:
-                    print("Error: Connection interrupted.")
-                    fancy_sleep("Reconnecting in:", 10)
-                    from_account.logout()
-                    to_account.logout()
-
+            print("--- From: {}, To: {} ---".format(data['FROM_MAIL'], data['TO_MAIL']))
+            from_account, to_account = authenticate()
+            copy_mail(from_account, to_account)
         except (ConnectionRefusedError, gaierror, imaplib.IMAP4.error) as e:
             print("  Unable to connect.")
             error_file.write("%s => %s\n" % (data['FROM_MAIL'], data['TO_MAIL']))
