@@ -31,15 +31,9 @@ def imap_connect(username, password, server, port=993):
 def get_namespace(imap):
     """ Get the namespace and separator of the specified mail account
 
-    Explanation:
+    Example:
         imap.namespace() returns:
             (<code>, [b'(("<namespace>" "<separator>")) NIL NIL'])
-        
-        imap.namespace()[1][0] returns:
-            '(("<namespace>" "<separator>")) NIL NIL'
-        
-        Using replace and shlex returns:
-            [<namespace>, <separator>, NIL, NIL]
 
     Args:
         imap <imaplib.IMAP4_SSL>: the account to check
@@ -53,6 +47,32 @@ def get_namespace(imap):
     )
 
     return (results[0], results[1])
+
+def prune_protected(mailboxes, ns):
+    """ Remove protected folders from a list of mailboxes
+
+    Exchange has several protected folders that are used for non-mail
+    purposes, but still appear in the list. Therefore, we want to exclude
+    these folders to prevent reading non-mail items.
+
+    Args:
+        [<str>]: list of mailboxes - Must not include surrounding quotes
+        <str>: namespace for the account
+
+    Returns:
+        [<str>]: list of mailboxes with protected folders removed
+    """
+    protected = ['Calendar', 'Contacts', 'Tasks', 'Journal', 'Deleted Items']
+    flagged = []
+
+    for folder in protected:
+        pattern = "(?:{})?{}\\b".format(ns,folder)
+        for mailbox in mailboxes:
+            result = re.match(pattern, mailbox, flags=re.IGNORECASE)
+            if result:
+                flagged.append(mailbox)
+    
+    return [mailbox for mailbox in mailboxes if mailbox not in flagged]
 
 def get_mailboxes(imap, with_quotes = True):
     """ Get a list of all mailboxes on the server.
@@ -72,6 +92,9 @@ def get_mailboxes(imap, with_quotes = True):
         )[-1].replace('"','') \
         for mailbox in imap.list()[1]
     ]
+
+    ns,_ = get_namespace(imap)
+    mailboxes = prune_protected(mailboxes, ns)
 
     if with_quotes:
         mailboxes = ['"'+mailbox+'"' for mailbox in mailboxes]
