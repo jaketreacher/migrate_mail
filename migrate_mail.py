@@ -9,12 +9,35 @@ import traceback
 from socket import gaierror
 
 def imap_connect(username, password, server, port=993):
+    """ Connect to the server using IMAP SSL
+
+    Args:
+        username <str>
+        password <str>
+        server <str>
+        port <int>: default 993 for SSL
+    
+    Returns:
+        <imaplib.IMAP4_SSL>: Reference to the connection
+    """
     imap = imaplib.IMAP4_SSL(server)
     imap.login(username, password)
 
     return imap
 
 def authenticate(verbose = True):
+    """ Authenticates accounts for both the server and the destination.
+
+    Args:
+        verbose <bool>: if true, will display messages.
+
+    Globals:
+        CREDENTIALS: a dictionary of credentials.
+            Set to the most recent accounts.
+            Configured in main().
+    """
+    global CREDENTIALS
+
     if verbose: print("Connecting to %s" % CREDENTIALS['FROM_MAIL'])
     from_account = imap_connect(
         CREDENTIALS['FROM_MAIL'],
@@ -32,6 +55,18 @@ def authenticate(verbose = True):
     print() # New line for formatting
 
     return from_account, to_account
+
+def fancy_sleep(message, duration):
+    """ Timeout with a countdown that displays on a single line.
+
+    Args:
+        message <str>: The message to display
+        duration <int>: The countdown duration
+    """
+    for idx in range(duration, -1, -1):
+        print("%s %s " % (message, idx), end="\r")
+        time.sleep(1)
+    print()
 
 def get_namespace(imap):
     """ Get the namespace and separator of the specified mail account
@@ -138,35 +173,17 @@ def convert_mailbox(from_account, to_account, mailbox):
 
     return converted
 
-def get_headers(imap, location):
-    header_list = []
-
-    data = imap.uid('search', None, 'ALL')[1]
-    uid_list = data[0].split()
-    length = len(uid_list)
-
-    for idx, uid in enumerate(uid_list):
-        # Progress indicator
-        print("Fetching {} headers... {}/{}".format(location, idx+1, length), end='\r')
-
-        data = imap.uid('fetch', uid, '(BODY.PEEK[HEADER])')[1]
-        message_id = email.message_from_bytes(data[0][1])['Message-ID'] # Used to check for duplicates
-
-        header_dict = {
-            'uid': uid,
-            'Message-ID': message_id
-        }
-
-        header_list.append(header_dict)
-
-    if( length > 0 ):
-        print() # Move cursor to next line
-    else:
-        print("Fetching %s headers... 0/0" % location)
-
-    return header_list
-
 def get_mail_count(imap, mailbox_list):
+    """ Gets the total number of emails on specified account.
+
+    Args:
+        imap <imaplib.IMAP4_SSL>: the account to check
+        mailbox_list [<str>]: a list of mailboxes
+            Must be surrounded by double quotes
+    
+    Returns:
+        <int>: total emails
+    """
     total = 0
     num_mailboxes = len(mailbox_list)
     for idx, mailbox in enumerate(mailbox_list):
@@ -178,27 +195,27 @@ def get_mail_count(imap, mailbox_list):
         % (total, idx+1, num_mailboxes))
     return total
 
-def get_all_headers(imap):
-    """ Get all headers
+def get_message_ids(imap):
+    """ Get all Message-IDs for the specified account
 
     Args:
         imap <imaplib.IMAP4_SSL>: account to fetch data
 
     Returns:
         A dictionary in the following format:
-        headers = {
+        package = {
             'mailbox0': [(uid0, mid0), (uid1, mid1)],
             'mailbox1': [(uid2, mid2), (uid3, mid3)]
         }
         mid = message-id
     """
-    headers = dict()
+    package = dict()
 
     mailboxes = get_mailboxes(imap)
     total = get_mail_count(imap, mailboxes)
     remaining = total
     for mailbox in mailboxes:
-        headers[mailbox] = list()
+        package[mailbox] = list()
 
         imap.select(mailbox)
         uid_list = imap.uid('search', None, 'ALL')[1][0].split()
@@ -217,14 +234,26 @@ def get_all_headers(imap):
                 remaining -= 1
                 continue
 
-            package = (uid, message_id)
-            headers[mailbox].append(package)
+            data = (uid, message_id)
+            package[mailbox].append(data)
             remaining -= 1
     print('Remaining: %d ' % remaining)
     
-    return headers
+    return package
 
 def get_mail_by_uid(imap, uid):
+    """ The full email as determined by the UID.
+    
+    Note: Must have used imap.select(<mailbox>) before
+    running this function.
+
+    Args:
+        imap <imaplib.IMAP4_SSL>: the server to fetch
+
+    Returns:
+        Dictionary, with the keys 'flags', 'date_time', and
+        'message'. Contents are self-explanatory...
+    """
     data = imap.uid('fetch', uid, '(FLAGS INTERNALDATE RFC822)')[1]
     flags = " ".join([flag.decode() for flag in imaplib.ParseFlags(data[0][0])])
     date_time = imaplib.Internaldate2tuple(data[0][0])
@@ -237,22 +266,35 @@ def get_mail_by_uid(imap, uid):
 
     return mail_data
 
-def get_unique_headers(from_account, to_account):
+def get_unique_uids(from_account, to_account):
+    """ Get all UIDs and their corresponding mailbox for emails
+    that do not appear on the destination.
+
+    Args:
+        from_account <imaplib.IMAP4_SSL>: source
+        to_account <imaplib.IMAP4_SSL>: destination
+
+    Returns:
+        {}, <int>
+        Dictionary in the format:
+            '<mailbox>': [uids]
+        <int>: total number of uids
+    """
     print("Fetching source headers...")
-    from_headers = get_all_headers(from_account)
+    from_mid_package = get_message_ids(from_account)
     print()
     print("Fetching destination headers...")
-    to_headers = get_all_headers(to_account)
+    to_mid_package = get_message_ids(to_account)
     print()
 
     to_mids = list()
-    for mailbox, data in to_headers.items():
+    for mailbox, data in to_mid_package.items():
         for uid, mid in data:
             to_mids.append(mid)
 
     unique = dict()
     total = 0
-    for mailbox, data in from_headers.items():
+    for mailbox, data in from_mid_package.items():
         unique[mailbox] = list()
         for uid, mid in data:
             if mid not in to_mids:
@@ -262,14 +304,22 @@ def get_unique_headers(from_account, to_account):
     return unique, total
 
 def copy_mail(from_account, to_account):
-    unique_headers, total = get_unique_headers(from_account, to_account)
+    """ Copies all emails from the source to the destination.
+
+    Will not copy any mail that already appears in the destination.
+
+    Args:
+        from_account <imaplib.IMAP4_SSL>: source
+        to_account <imaplib.IMAP4_SSL>: destination
+    """
+    unique_uid_package, total = get_unique_uids(from_account, to_account)
 
     remaining = total
 
+    print("Copying mail...")
+    print("Total: %d" % total)
     if total > 0:
-        print("Copying mail...")
-        print("Total: %d" % total)
-        for mailbox, uid_list in unique_headers.items():
+        for mailbox, uid_list in unique_uid_package.items():
             to_mailbox = convert_mailbox(from_account, to_account, mailbox)
             from_account.select(mailbox)
             
@@ -278,6 +328,9 @@ def copy_mail(from_account, to_account):
                 success = False
                 while(not success):
                     try:
+                        # The pipe was breaking here when transferring to Exchange.
+                        # Hence, we catch the exception and reconnect, which
+                        # appears to fix the problem.
                         to_account.append(to_mailbox, **get_mail_by_uid(from_account, uid))
                         remaining -= 1
                         success = True
@@ -293,16 +346,12 @@ def copy_mail(from_account, to_account):
     else:
         print('No mail to copy')
     
-def fancy_sleep(message, duration):
-    for idx in range(duration, -1, -1):
-        print("%s %s " % (message, idx), end="\r")
-        time.sleep(1)
-    print()
-
 def main():
+    # CREDENTIALS used as a global to allow to reconnect if the pipe
+    # breaks when copying emails.
     global CREDENTIALS
     
-    error_file = open('log/%d.txt' % int(time.time()), 'w')
+    error_file = open('log/errors.txt', 'a')
 
     with open('data.csv') as datafile:
         reader = csv.DictReader(datafile)
@@ -322,7 +371,7 @@ def main():
         
         from_account.logout()
         to_account.logout()
-
+        print()
     error_file.close()
 
 if __name__ == "__main__":
